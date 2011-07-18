@@ -128,6 +128,16 @@ static inline u32 smsc911x_reg_read(struct smsc911x_data *pdata, u32 reg)
 	if (pdata->config.flags & SMSC911X_USE_32BIT)
 		return readl(pdata->ioaddr + reg);
 
+#ifdef CONFIG_ARCH_MXC
+	if (pdata->config.flags & 0x8000) {
+		u32 data;
+		unsigned long flags;
+		spin_lock_irqsave(&pdata->dev_lock, flags);
+		data = spi_cpld_read(reg);
+		spin_unlock_irqrestore(&pdata->dev_lock, flags);
+		return data;
+	} else
+#endif
 	if (pdata->config.flags & SMSC911X_USE_16BIT) {
 		u32 data;
 		unsigned long flags;
@@ -155,6 +165,15 @@ static inline void smsc911x_reg_write(struct smsc911x_data *pdata, u32 reg,
 		return;
 	}
 
+#ifdef CONFIG_ARCH_MXC
+	if (pdata->config.flags & 0x8000) {
+		unsigned long flags;
+		spin_lock_irqsave(&pdata->dev_lock, flags);
+		spi_cpld_write(reg, val);
+		spin_unlock_irqrestore(&pdata->dev_lock, flags);
+		return;
+	} else
+#endif
 	if (pdata->config.flags & SMSC911X_USE_16BIT) {
 		unsigned long flags;
 
@@ -2118,6 +2137,9 @@ static int smsc911x_suspend(struct platform_device *pdev, pm_message_t state)
 {
 	struct net_device *dev = platform_get_drvdata(pdev);
 	struct smsc911x_data *pdata = netdev_priv(dev);
+	struct phy_device *phy_dev = pdata->phy_dev;
+
+	smsc911x_mii_write(phy_dev->bus, phy_dev->addr, MII_BMCR, BMCR_PDOWN);
 
 	/* enable wake on LAN, energy detection and the external PME
 	 * signal. */
@@ -2132,6 +2154,7 @@ static int smsc911x_resume(struct platform_device *pdev)
 {
 	struct net_device *dev = platform_get_drvdata(pdev);
 	struct smsc911x_data *pdata = netdev_priv(dev);
+	struct phy_device *phy_dev = pdata->phy_dev;
 	unsigned int to = 100;
 
 	/* Note 3.11 from the datasheet:
@@ -2145,6 +2168,8 @@ static int smsc911x_resume(struct platform_device *pdev)
 	 * if it failed. */
 	while (!(smsc911x_reg_read(pdata, PMT_CTRL) & PMT_CTRL_READY_) && --to)
 		udelay(1000);
+
+	smsc911x_mii_write(phy_dev->bus, phy_dev->addr, MII_BMCR, BMCR_ANENABLE | BMCR_ANRESTART);
 
 	return (to == 0) ? -EIO : 0;
 }

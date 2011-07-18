@@ -369,7 +369,11 @@ static struct {
 } mod_data = {					// Default values
 	.transport_parm		= "BBB",
 	.protocol_parm		= "SCSI",
+#ifdef CONFIG_MXS_VBUS_CURRENT_DRAW
+	.removable		= 1,
+#else
 	.removable		= 0,
+#endif
 	.can_stall		= 1,
 	.cdrom			= 0,
 	.vendor			= DRIVER_VENDOR_ID,
@@ -714,7 +718,15 @@ struct fsg_dev {
 	unsigned int		nluns;
 	struct lun		*luns;
 	struct lun		*curlun;
+
+#ifdef CONFIG_FSL_UTP
+	void			*utp;
+#endif
 };
+
+#ifdef CONFIG_FSL_UTP
+#include "fsl_updater.h"
+#endif
 
 typedef void (*fsg_routine_t)(struct fsg_dev *);
 
@@ -752,7 +764,7 @@ static void dump_msg(struct fsg_dev *fsg, const char *label,
 	if (length < 512) {
 		DBG(fsg, "%s, length %u:\n", label, length);
 		print_hex_dump(KERN_DEBUG, "", DUMP_PREFIX_OFFSET,
-				16, 1, buf, length, 0);
+				16, 1, buf, length, !0);
 	}
 }
 
@@ -838,7 +850,11 @@ device_desc = {
 
 	.iManufacturer =	STRING_MANUFACTURER,
 	.iProduct =		STRING_PRODUCT,
+#ifdef CONFIG_FSL_UTP
+	.iSerialNumber = 0,
+#else
 	.iSerialNumber =	STRING_SERIAL,
+#endif
 	.bNumConfigurations =	1,
 };
 
@@ -2068,6 +2084,13 @@ static int do_request_sense(struct fsg_dev *fsg, struct fsg_buffhd *bh)
 	}
 #endif
 
+#ifdef CONFIG_FSL_UTP
+	if (utp_get_sense(fsg) == 0) {	/* got the sense from the UTP */
+		sd = UTP_CTX(fsg)->sd;
+		sdinfo = UTP_CTX(fsg)->sdinfo;
+		valid = 0;
+	} else
+#endif
 	if (!curlun) {		// Unsupported LUNs are okay
 		fsg->bad_lun_okay = 1;
 		sd = SS_LOGICAL_UNIT_NOT_SUPPORTED;
@@ -2089,6 +2112,9 @@ static int do_request_sense(struct fsg_dev *fsg, struct fsg_buffhd *bh)
 	buf[7] = 18 - 8;			// Additional sense length
 	buf[12] = ASC(sd);
 	buf[13] = ASCQ(sd);
+#ifdef CONFIG_FSL_UTP
+	put_unaligned_be32(UTP_CTX(fsg)->sdinfo_h, &buf[8]);
+#endif
 	return 18;
 }
 
@@ -2849,6 +2875,13 @@ static int do_scsi_command(struct fsg_dev *fsg)
 	fsg->phase_error = 0;
 	fsg->short_packet_received = 0;
 
+#ifdef CONFIG_FSL_UTP
+	reply = utp_handle_message(fsg, fsg->cmnd, reply);
+
+	if (reply != -EINVAL)
+		return reply;
+#endif
+
 	down_read(&fsg->filesem);	// We're using the backing file
 	switch (fsg->cmnd[0]) {
 
@@ -3537,10 +3570,12 @@ static int fsg_main_thread(void *fsg_)
 	/* Allow the thread to be frozen */
 	set_freezable();
 
+#ifndef CONFIG_FSL_UTP
 	/* Arrange for userspace references to be interpreted as kernel
 	 * pointers.  That way we can pass a kernel pointer to a routine
 	 * that expects a __user pointer and it will work okay. */
 	set_fs(get_ds());
+#endif
 
 	/* The main loop */
 	while (fsg->state != FSG_STATE_TERMINATED) {
@@ -3851,6 +3886,9 @@ static void /* __init_or_exit */ fsg_unbind(struct usb_gadget *gadget)
 	}
 
 	set_gadget_data(gadget, NULL);
+#ifdef CONFIG_FSL_UTP
+	utp_exit(fsg);
+#endif
 }
 
 
@@ -3888,6 +3926,17 @@ static int __init check_parameters(struct fsg_dev *fsg)
 	}
 
 	prot = simple_strtol(mod_data.protocol_parm, NULL, 0);
+
+#ifdef CONFIG_FSL_UTP
+	mod_data.can_stall = 0;
+	mod_data.removable = 1;
+	mod_data.nluns = 1;
+	mod_data.file[0] = NULL;
+	mod_data.vendor = 0x066F;
+	mod_data.product = 0x37FF;
+	pr_info("%s:UTP settings are in place now, overriding defaults\n",
+		__func__);
+#endif
 
 #ifdef CONFIG_USB_FILE_STORAGE_TEST
 	if (strnicmp(mod_data.transport_parm, "BBB", 10) == 0) {
@@ -3941,8 +3990,9 @@ static int __init check_parameters(struct fsg_dev *fsg)
 
 	return 0;
 }
-
-
+#ifdef CONFIG_FSL_UTP
+#include "fsl_updater.c"
+#endif
 static int __init fsg_bind(struct usb_gadget *gadget)
 {
 	struct fsg_dev		*fsg = the_fsg;
@@ -3969,6 +4019,10 @@ static int __init fsg_bind(struct usb_gadget *gadget)
 			dev_attr_ro.store = store_ro;
 		}
 	}
+
+#ifdef CONFIG_FSL_UTP
+	utp_init(fsg);
+#endif
 
 	/* Find out how many LUNs there should be */
 	i = mod_data.nluns;
@@ -4242,7 +4296,6 @@ static int __init fsg_init(void)
 {
 	int		rc;
 	struct fsg_dev	*fsg;
-
 	if ((rc = fsg_alloc()) != 0)
 		return rc;
 	fsg = the_fsg;
@@ -4250,8 +4303,12 @@ static int __init fsg_init(void)
 		kref_put(&fsg->ref, fsg_release);
 	return rc;
 }
-module_init(fsg_init);
 
+#ifdef CONFIG_MXS_VBUS_CURRENT_DRAW
+	fs_initcall(fsg_init);
+#else
+	module_init(fsg_init);
+#endif
 
 static void __exit fsg_cleanup(void)
 {

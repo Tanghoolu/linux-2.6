@@ -3,7 +3,7 @@
  *
  * Author: Vitaly Wool <vital@embeddedalley.com>
  *
- * Copyright 2008 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright 2008-2010 Freescale Semiconductor, Inc. All Rights Reserved.
  * Copyright 2008 Embedded Alley Solutions, Inc All Rights Reserved.
  */
 
@@ -15,7 +15,6 @@
  * http://www.opensource.org/licenses/gpl-license.html
  * http://www.gnu.org/copyleft/gpl.html
  */
-#define DEBUG
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
@@ -30,6 +29,7 @@
 #include <asm/clkdev.h>
 #include <mach/platform.h>
 #include <mach/regs-clkctrl.h>
+#include <linux/cpufreq.h>
 
 #include "clock.h"
 
@@ -39,6 +39,7 @@ static struct clk osc_24M;
 static struct clk pll_clk;
 static struct clk cpu_clk;
 static struct clk hclk;
+extern int cpufreq_trig_needed;
 
 static int propagate_rate(struct clk *);
 
@@ -50,6 +51,14 @@ static inline int clk_is_busy(struct clk *clk)
 static inline int clk_good(struct clk *clk)
 {
 	return clk && !IS_ERR(clk) && clk->ops;
+}
+
+int clk_get_usage(struct clk *clk)
+{
+	if (unlikely(!clk_good(clk)))
+		return 0;
+
+	return clk->usage;
 }
 
 static int std_clk_enable(struct clk *clk)
@@ -219,6 +228,7 @@ static int lcdif_set_rate(struct clk *clk, u32 rate)
 	 * 108 * ns_cycle <= 875 * div
 	 */
 	u32 ns_cycle = 1000000 / rate;
+	ns_cycle *= 2; /* Fix calculate double frequency */
 	u32 div, reg_val;
 	u32 lowest_result = (u32) -1;
 	u32 lowest_div = 0, lowest_fracdiv = 0;
@@ -358,6 +368,7 @@ static int cpu_set_rate(struct clk *clk, u32 rate)
 		reg_val = __raw_readl(REGS_CLKCTRL_BASE + HW_CLKCTRL_CPU);
 		reg_val &= ~0x3F;
 		reg_val |= clkctrl_cpu;
+
 		__raw_writel(reg_val, REGS_CLKCTRL_BASE + HW_CLKCTRL_CPU);
 
 		for (i = 10000; i; i--)
@@ -421,6 +432,83 @@ static long cpu_round_rate(struct clk *clk, u32 rate)
 	return r;
 }
 
+static int emi_set_rate(struct clk *clk, u32 rate)
+{
+	int ret = 0;
+
+	if (rate < 24000)
+		return -EINVAL;
+	else {
+		int i;
+		struct stmp3xxx_emi_scaling_data sc_data;
+		int (*scale)(struct stmp3xxx_emi_scaling_data *) =
+			(void *)(STMP3XXX_OCRAM_BASE + 0x1000);
+		void *saved_ocram;
+		u32 clkctrl_emi;
+		u32 clkctrl_frac;
+		int div = 1;
+		/*
+		 * We've been setting div to HW_CLKCTRL_CPU_RD() & 0x3f so far.
+		 * TODO: verify 1 is still valid.
+		 */
+
+		if (!stmp3xxx_ram_funcs_sz)
+			goto out;
+
+		for (clkctrl_emi = div; clkctrl_emi < 0x3f;
+					clkctrl_emi += div) {
+			clkctrl_frac =
+				(pll_clk.rate * 18 + rate * clkctrl_emi / 2) /
+					(rate * clkctrl_emi);
+			if (clkctrl_frac >= 18 && clkctrl_frac <= 35) {
+				pr_debug("%s: clkctrl_frac found %d for %d\n",
+					__func__, clkctrl_frac, clkctrl_emi);
+				if (pll_clk.rate * 18 /
+					clkctrl_frac / clkctrl_emi / 100 ==
+					rate / 100)
+					break;
+			}
+		}
+		if (clkctrl_emi >= 0x3f)
+			return -EINVAL;
+		pr_debug("%s: clkctrl_emi %d, clkctrl_frac %d\n",
+			__func__, clkctrl_emi, clkctrl_frac);
+
+		saved_ocram = kmalloc(stmp3xxx_ram_funcs_sz, GFP_KERNEL);
+		if (!saved_ocram)
+			return -ENOMEM;
+		memcpy(saved_ocram, scale, stmp3xxx_ram_funcs_sz);
+		memcpy(scale, stmp3xxx_ram_freq_scale, stmp3xxx_ram_funcs_sz);
+
+		sc_data.emi_div = clkctrl_emi;
+		sc_data.frac_div = clkctrl_frac;
+		sc_data.cur_freq = clk->rate / 1000;
+		sc_data.new_freq = rate / 1000;
+
+		local_irq_disable();
+		local_fiq_disable();
+
+		scale(&sc_data);
+
+		local_fiq_enable();
+		local_irq_enable();
+
+		for (i = 10000; i; i--)
+			if (!clk_is_busy(clk))
+				break;
+		memcpy(scale, saved_ocram, stmp3xxx_ram_funcs_sz);
+		kfree(saved_ocram);
+
+		if (!i) {
+			printk(KERN_ERR "couldn't set up EMI divisor\n");
+			ret = -ETIMEDOUT;
+			goto out;
+		}
+	}
+out:
+	return ret;
+}
+
 static long emi_get_rate(struct clk *clk)
 {
 	long rate = clk->parent->rate * 18;
@@ -453,9 +541,14 @@ static int clkseq_set_parent(struct clk *clk, struct clk *parent)
 
 			hbus_val &= ~(BM_CLKCTRL_HBUS_DIV_FRAC_EN |
 				      BM_CLKCTRL_HBUS_DIV);
+			hbus_val |= 1;
+
 			clk->saved_div = cpu_val & BM_CLKCTRL_CPU_DIV_CPU;
 			cpu_val &= ~BM_CLKCTRL_CPU_DIV_CPU;
 			cpu_val |= 1;
+
+			__raw_writel(1 << clk->bypass_shift,
+					clk->bypass_reg + shift);
 
 			if (machine_is_stmp378x()) {
 				__raw_writel(hbus_val,
@@ -485,10 +578,15 @@ static int clkseq_set_parent(struct clk *clk, struct clk *parent)
 					REGS_CLKCTRL_BASE + HW_CLKCTRL_CPU);
 				hclk.rate = 0;
 			}
-		}
-#endif
-		__raw_writel(1 << clk->bypass_shift, clk->bypass_reg + shift);
 
+			__raw_writel(1 << clk->bypass_shift,
+					clk->bypass_reg + shift);
+		} else
+			__raw_writel(1 << clk->bypass_shift,
+					clk->bypass_reg + shift);
+#else
+		__raw_writel(1 << clk->bypass_shift, clk->bypass_reg + shift);
+#endif
 		ret = 0;
 	}
 
@@ -652,6 +750,8 @@ static struct clk_ops lcdif_ops = {
 
 static struct clk_ops emi_ops = {
 	.get_rate	= emi_get_rate,
+	.set_rate	= emi_set_rate,
+	.set_parent	= clkseq_set_parent,
 };
 
 /* List of on-chip clocks */
@@ -774,7 +874,7 @@ static struct clk lcdif_clk = {
 	.enable_negate	= 1,
 	.bypass_reg	= REGS_CLKCTRL_BASE + HW_CLKCTRL_CLKSEQ,
 	.bypass_shift	= 1,
-	.flags		= NEEDS_SET_PARENT,
+	.flags		= NEEDS_SET_PARENT | CPU_FREQ_TRIG_UPDATE,
 	.ops		= &lcdif_ops,
 };
 
@@ -857,6 +957,51 @@ static struct clk usb_clk = {
 	.enable_reg	= REGS_CLKCTRL_BASE + HW_CLKCTRL_PLLCTRL0,
 	.enable_shift	= 18,
 	.enable_negate	= 1,
+	.flags		= CPU_FREQ_TRIG_UPDATE,
+	.ops		= &min_ops,
+};
+
+static struct clk vid_clk = {
+	.parent		= &osc_24M,
+#ifdef CONFIG_MACH_STMP378X
+	.enable_reg	= REGS_CLKCTRL_BASE + HW_CLKCTRL_FRAC1,
+	.enable_shift	= 31,
+	.enable_negate	= 1,
+#endif
+	.flags		= RATE_PROPAGATES,
+	.ops		= &min_ops,
+};
+
+static struct clk clk_tv108M_ng = {
+	.parent		= &vid_clk,
+#ifdef CONFIG_MACH_STMP378X
+	.enable_reg	= REGS_CLKCTRL_BASE + HW_CLKCTRL_TV,
+	.enable_shift	= 31,
+	.enable_negate	= 1,
+#endif
+	.flags		= FIXED_RATE,
+	.ops		= &min_ops,
+};
+
+static struct clk clk_tv54M = {
+	.parent		= &vid_clk,
+#ifdef CONFIG_MACH_STMP378X
+	.enable_reg	= REGS_CLKCTRL_BASE + HW_CLKCTRL_TV,
+	.enable_shift	= 30,
+	.enable_negate	= 1,
+#endif
+	.flags		= FIXED_RATE,
+	.ops		= &min_ops,
+};
+
+static struct clk clk_tv27M = {
+	.parent		= &vid_clk,
+#ifdef CONFIG_MACH_STMP378X
+	.enable_reg	= REGS_CLKCTRL_BASE + HW_CLKCTRL_TV,
+	.enable_shift	= 30,
+	.enable_negate	= 1,
+#endif
+	.flags		= FIXED_RATE,
 	.ops		= &min_ops,
 };
 
@@ -922,6 +1067,21 @@ static struct clk_lookup onchip_clks[] = {
 	}, {
 		.con_id = "usb",
 		.clk = &usb_clk,
+	}, {
+		.con_id = "ref_vid",
+		.clk = &vid_clk,
+	}, {
+		.con_id = "tv108M_ng",
+		.clk = &clk_tv108M_ng,
+	}, {
+		.con_id = "tv54M",
+		.clk = &clk_tv54M,
+	}, {
+		.con_id = "tv27M",
+		.clk = &clk_tv27M,
+	}, {
+		.con_id = "saif",
+		.clk = &saif_clk,
 	},
 };
 
@@ -1004,6 +1164,7 @@ EXPORT_SYMBOL(clk_set_rate);
 int clk_enable(struct clk *clk)
 {
 	unsigned long clocks_flags;
+	u8 pre_usage;
 
 	if (unlikely(!clk_good(clk)))
 		return -EINVAL;
@@ -1013,11 +1174,18 @@ int clk_enable(struct clk *clk)
 
 	spin_lock_irqsave(&clocks_lock, clocks_flags);
 
+	pre_usage = clk->usage;
 	clk->usage++;
 	if (clk->ops && clk->ops->enable)
 		clk->ops->enable(clk);
 
 	spin_unlock_irqrestore(&clocks_lock, clocks_flags);
+	if ((clk->flags & CPU_FREQ_TRIG_UPDATE)
+	    && (pre_usage == 0)) {
+		cpufreq_trig_needed = 1;
+		cpufreq_update_policy(0);
+	}
+
 	return 0;
 }
 EXPORT_SYMBOL(clk_enable);
@@ -1041,6 +1209,9 @@ void clk_disable(struct clk *clk)
 	if (unlikely(!clk_good(clk)))
 		return;
 
+	if (!(clk->usage))
+		return;
+
 	spin_lock_irqsave(&clocks_lock, clocks_flags);
 
 	if ((--clk->usage) == 0 && clk->ops->disable)
@@ -1049,6 +1220,12 @@ void clk_disable(struct clk *clk)
 	spin_unlock_irqrestore(&clocks_lock, clocks_flags);
 	if (clk->parent)
 		clk_disable(clk->parent);
+
+	if ((clk->flags & CPU_FREQ_TRIG_UPDATE)
+			&& (clk->usage == 0)) {
+		cpufreq_trig_needed = 1;
+		cpufreq_update_policy(0);
+	}
 }
 EXPORT_SYMBOL(clk_disable);
 
@@ -1094,6 +1271,26 @@ struct clk *clk_get_parent(struct clk *clk)
 }
 EXPORT_SYMBOL(clk_get_parent);
 
+static void clkctrl_enable_powersavings(void)
+{
+	u32 reg;
+
+	reg = __raw_readl(REGS_CLKCTRL_BASE + HW_CLKCTRL_HBUS);
+	reg |= BM_CLKCTRL_HBUS_APBHDMA_AS_ENABLE |
+		BM_CLKCTRL_HBUS_APBXDMA_AS_ENABLE |
+		BM_CLKCTRL_HBUS_TRAFFIC_AS_ENABLE |
+		BM_CLKCTRL_HBUS_TRAFFIC_JAM_AS_ENABLE |
+		BM_CLKCTRL_HBUS_CPU_DATA_AS_ENABLE |
+		BM_CLKCTRL_HBUS_CPU_INSTR_AS_ENABLE |
+		BM_CLKCTRL_HBUS_DCP_AS_ENABLE |
+		BM_CLKCTRL_HBUS_PXP_AS_ENABLE |
+		BM_CLKCTRL_HBUS_AUTO_SLOW_MODE;
+
+	reg &= ~BM_CLKCTRL_HBUS_SLOW_DIV;
+	reg |= BV_CLKCTRL_HBUS_SLOW_DIV__BY32;
+	__raw_writel(reg, REGS_CLKCTRL_BASE + HW_CLKCTRL_HBUS);
+}
+
 static int __init clk_init(void)
 {
 	struct clk_lookup *cl;
@@ -1129,6 +1326,8 @@ static int __init clk_init(void)
 
 		clkdev_add(cl);
 	}
+	clkctrl_enable_powersavings();
+
 	return 0;
 }
 

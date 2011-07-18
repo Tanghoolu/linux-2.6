@@ -294,7 +294,8 @@ config ARCH_MXC
 	select ARCH_MTD_XIP
 	select GENERIC_GPIO
 	select ARCH_REQUIRE_GPIOLIB
-	select HAVE_CLK
+#	select HAVE_CLK
+	select ZONE_DMA
 	help
 	  Support for Freescale MXC/iMX-based family of processors
 
@@ -308,8 +309,20 @@ config ARCH_STMP3XXX
 	select GENERIC_CLOCKEVENTS
 	select GENERIC_GPIO
 	select USB_ARCH_HAS_EHCI
+	select ZONE_DMA
 	help
 	  Support for systems based on the Freescale 3xxx CPUs.
+
+config ARCH_MXS
+	bool "Freescale i.MXS family soc"
+	select HAVE_CLK
+	select ARCH_REQUIRE_GPIOLIB
+	select GENERIC_TIME
+	select GENERIC_CLOCKEVENTS
+	select GENERIC_GPIO
+	select COMMON_CLKDEV
+	help
+	  Support for Freescale i.MXS family of processors.
 
 config ARCH_NETX
 	bool "Hilscher NetX based"
@@ -716,6 +729,8 @@ source "arch/arm/mach-at91/Kconfig"
 
 source "arch/arm/plat-mxc/Kconfig"
 
+source "arch/arm/plat-mxs/Kconfig"
+
 source "arch/arm/mach-netx/Kconfig"
 
 source "arch/arm/mach-ns9xxx/Kconfig"
@@ -771,6 +786,19 @@ config ARM_ERRATA_411920
 	  fail. This erratum is present in 1136 (before r1p4), 1156 and 1176.
 	  It does not affect the MPCore. This option enables the ARM Ltd.
 	  recommended workaround.
+
+config ARM_ERRATA_364296
+	bool "Enable partial low interrupt latency mode for ARM1136"
+	depends on CPU_V6 && !SMP
+	default n
+	help
+	  This options enables the workaround for the 364296 ARM1136
+	  r0pX errata (possible cache data corruption with
+	  hit-under-miss enabled). It sets the undocumented bit 31 in
+	  the auxiliary control register and the FI bit in the control
+	  register, thus disabling hit-under-miss without putting the
+	  processor into full low interrupt latency mode. ARM11MPCore
+	  is not affected.
 
 config ARM_ERRATA_430973
 	bool "ARM errata: Stale prediction on replaced interworking branch"
@@ -1064,7 +1092,7 @@ config LEDS
 		   ARCH_OMAP || ARCH_P720T || ARCH_PXA_IDP || \
 		   ARCH_SA1100 || ARCH_SHARK || ARCH_VERSATILE || \
 		   ARCH_AT91 || ARCH_DAVINCI || \
-		   ARCH_KS8695 || MACH_RD88F5182 || ARCH_REALVIEW
+		   ARCH_KS8695 || MACH_RD88F5182 || ARCH_REALVIEW || ARCH_MXC
 	help
 	  If you say Y here, the LEDs on your machine will be used
 	  to provide useful information about your current system status.
@@ -1137,6 +1165,9 @@ config UACCESS_WITH_MEMCPY
 
 	  However, if the CPU data cache is using a write-allocate mode,
 	  this option is unlikely to provide any performance gain.
+
+config RUNTIME_PHYS_OFFSET
+	bool
 
 endmenu
 
@@ -1241,7 +1272,7 @@ endmenu
 
 menu "CPU Power Management"
 
-if (ARCH_SA1100 || ARCH_INTEGRATOR || ARCH_OMAP || ARCH_PXA || ARCH_S3C64XX)
+if (ARCH_SA1100 || ARCH_INTEGRATOR || ARCH_OMAP || ARCH_PXA || ARCH_S3C64XX || ARCH_MXC || ARCH_STMP3XXX || ARCH_MX23 || ARCH_MX28)
 
 source "drivers/cpufreq/Kconfig"
 
@@ -1275,6 +1306,12 @@ config CPU_FREQ_PXA
 config CPU_FREQ_S3C64XX
 	bool "CPUfreq support for Samsung S3C64XX CPUs"
 	depends on CPU_FREQ && CPU_S3C6410
+
+config CPU_FREQ_IMX
+         tristate "CPUfreq driver for i.MX CPUs"
+         depends on ARCH_MXC && CPU_FREQ && REGULATOR
+         help
+           This enables the CPUfreq driver for i.MX CPUs.
 
 endif
 
@@ -1423,6 +1460,8 @@ source "drivers/char/Kconfig"
 
 source "drivers/i2c/Kconfig"
 
+source "drivers/i2c-slave/Kconfig"
+
 source "drivers/spi/Kconfig"
 
 source "drivers/gpio/Kconfig"
@@ -1476,6 +1515,10 @@ source "drivers/regulator/Kconfig"
 source "drivers/uio/Kconfig"
 
 source "drivers/staging/Kconfig"
+
+if ARCH_MXC
+source "drivers/mxc/Kconfig"
+endif
 
 endmenu
 

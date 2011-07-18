@@ -151,9 +151,12 @@ static int ehci_bus_suspend (struct usb_hcd *hcd)
 		}
 
 		/* enable remote wakeup on all ports */
-		if (hcd->self.root_hub->do_remote_wakeup)
-			t2 |= PORT_WAKE_BITS;
-		else
+		if (hcd->self.root_hub->do_remote_wakeup) {
+			if (t1 & PORT_CONNECT)
+				t2 |= PORT_WKOC_E|PORT_WKDISC_E;
+			else
+				t2 |= PORT_WKOC_E|PORT_WKCONN_E;
+		} else
 			t2 &= ~PORT_WAKE_BITS;
 
 		if (t1 != t2) {
@@ -548,6 +551,37 @@ ehci_hub_descriptor (
 #endif
 	desc->wHubCharacteristics = cpu_to_le16(temp);
 }
+
+#ifdef CONFIG_USB_OTG
+static int ehci_start_port_reset(struct usb_hcd *hcd, unsigned port)
+{
+	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
+	u32 status;
+
+	if (!port)
+		return -EINVAL;
+	port--;
+
+	/* start port reset before HNP protocol time out */
+	status = readl(&ehci->regs->port_status[port]);
+	if (!(status & PORT_CONNECT))
+		return -ENODEV;
+
+	/* khubd will finish the reset later */
+	if (ehci_is_TDI(ehci))
+		writel(PORT_RESET | (status & ~(PORT_CSC | PORT_PEC
+				| PORT_OCC)), &ehci->regs->port_status[port]);
+	else
+		writel(PORT_RESET, &ehci->regs->port_status[port]);
+
+	return 0;
+}
+#else
+static int ehci_start_port_reset(struct usb_hcd *hcd, unsigned port)
+{
+	return 0;
+}
+#endif /* CONFIG_USB_OTG */
 
 /*-------------------------------------------------------------------------*/
 

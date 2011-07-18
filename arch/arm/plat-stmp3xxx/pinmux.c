@@ -3,7 +3,7 @@
  *
  * Author: Vladislav Buzov <vbuzov@embeddedalley.com>
  *
- * Copyright 2008 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright 2008-2009 Freescale Semiconductor, Inc. All Rights Reserved.
  * Copyright 2008 Embedded Alley Solutions, Inc All Rights Reserved.
  */
 
@@ -15,7 +15,7 @@
  * http://www.opensource.org/licenses/gpl-license.html
  * http://www.gnu.org/copyleft/gpl.html
  */
-#define DEBUG
+//#define DEBUG
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -429,6 +429,16 @@ static void stmp3xxx_pin_unmask_irq(unsigned irq)
 	stmp3xxx_setl(1 << gpio, pm->pin2irq);
 }
 
+static void stmp3xxx_pin_disable_irq(unsigned irq)
+{
+	struct stmp3xxx_pinmux_bank *pm;
+	unsigned gpio;
+
+	stmp3xxx_irq_to_gpio(irq, &pm, &gpio);
+	stmp3xxx_clearl(1 << gpio, pm->irqen);
+	stmp3xxx_clearl(1 << gpio, pm->pin2irq);
+}
+
 static inline
 struct stmp3xxx_pinmux_bank *to_pinmux_bank(struct gpio_chip *chip)
 {
@@ -490,22 +500,27 @@ static void stmp3xxx_gpio_free(struct gpio_chip *chip, unsigned offset)
 static void stmp3xxx_gpio_irq(u32 irq, struct irq_desc *desc)
 {
 	struct stmp3xxx_pinmux_bank *pm = get_irq_data(irq);
-	int gpio_irq = pm->virq;
+	int gpio_virq = pm->virq;
 	u32 stat = __raw_readl(pm->irqstat);
+
+	desc->chip->mask(irq);	/* irq = gpio irq number */
 
 	while (stat) {
 		if (stat & 1)
-			irq_desc[gpio_irq].handle_irq(gpio_irq,
-				&irq_desc[gpio_irq]);
-		gpio_irq++;
+			generic_handle_irq(gpio_virq);
+		gpio_virq++;
 		stat >>= 1;
 	}
+
+	desc->chip->ack(irq);
+	desc->chip->unmask(irq);
 }
 
 static struct irq_chip gpio_irq_chip = {
 	.ack	= stmp3xxx_pin_ack_irq,
 	.mask	= stmp3xxx_pin_mask_irq,
 	.unmask	= stmp3xxx_pin_unmask_irq,
+	.disable = stmp3xxx_pin_disable_irq,
 	.set_type = stmp3xxx_set_irqtype,
 };
 
@@ -532,7 +547,7 @@ int __init stmp3xxx_pinmux_init(int virtual_irq_start)
 		pm->chip.free = stmp3xxx_gpio_free;
 		pm->virq = virtual_irq_start + b * 32;
 
-		for (virq = pm->virq; virq < pm->virq; virq++) {
+		for (virq = pm->virq; virq < pm->virq + 32; virq++) {
 			gpio_irq_chip.mask(virq);
 			set_irq_chip(virq, &gpio_irq_chip);
 			set_irq_handler(virq, handle_level_irq);

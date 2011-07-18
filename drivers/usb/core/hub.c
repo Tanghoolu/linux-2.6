@@ -37,6 +37,24 @@
 #endif
 #endif
 
+#ifdef CONFIG_ARCH_STMP3XXX
+#define STMP3XXX_USB_HOST_HACK
+#endif
+
+#ifdef CONFIG_ARCH_MXS
+#define MXS_USB_HOST_HACK
+
+#include <linux/fsl_devices.h>
+extern void fsl_platform_set_usb_phy_dis(struct fsl_usb2_platform_data *pdata,
+					 bool enable);
+#endif
+
+#ifdef STMP3XXX_USB_HOST_HACK
+#include <linux/fsl_devices.h>
+#include <mach/regs-usbphy.h>
+#include <mach/platform.h>
+#endif
+
 struct usb_hub {
 	struct device		*intfdev;	/* the "interface" device */
 	struct usb_device	*hdev;
@@ -1159,6 +1177,11 @@ static int hub_probe(struct usb_interface *intf, const struct usb_device_id *id)
 			"Unsupported bus topology: hub nested too deep\n");
 		return -E2BIG;
 	}
+
+	/* Defaultly disable autosuspend for hub and reley on sys
+	 * to enable it.
+	 */
+	hdev->autosuspend_disabled = 1;
 
 #ifdef	CONFIG_USB_OTG_BLACKLIST_HUB
 	if (hdev->parent) {
@@ -2696,6 +2719,33 @@ hub_port_init (struct usb_hub *hub, struct usb_device *udev, int port1,
 			break;
 		}
 	}
+
+#ifdef STMP3XXX_USB_HOST_HACK
+	{	/*Must enable HOSTDISCONDETECT after second reset*/
+		if (port1 == 1) {
+			if (udev->speed == USB_SPEED_HIGH) {
+				stmp3xxx_setl(
+					BM_USBPHY_CTRL_ENHOSTDISCONDETECT,
+					REGS_USBPHY_BASE + HW_USBPHY_CTRL);
+			}
+		}
+	}
+#endif
+
+#ifdef MXS_USB_HOST_HACK
+	{	/*Must enable HOSTDISCONDETECT after second reset*/
+		if (port1 == 1) {
+			if (udev->speed == USB_SPEED_HIGH) {
+				struct device *dev = hcd->self.controller;
+				struct fsl_usb2_platform_data *pdata;
+				pdata = (struct fsl_usb2_platform_data *)
+					 dev->platform_data;
+				fsl_platform_set_usb_phy_dis(pdata, 1);
+			}
+		}
+	}
+#endif
+
 	if (retval)
 		goto fail;
 
@@ -2822,6 +2872,53 @@ static void hub_port_connect_change(struct usb_hub *hub, int port1,
 	dev_dbg (hub_dev,
 		"port %d, status %04x, change %04x, %s\n",
 		port1, portstatus, portchange, portspeed (portstatus));
+
+#ifdef STMP3XXX_USB_HOST_HACK
+	{
+	/*
+	 * FIXME: the USBPHY of STMP3xxx SoC has bug. The usb port power
+	 * is never enabled during standard ehci reset procedure if the
+	 * external device once passed plug/unplug procedure. This work-
+	 * around resets and reinitiates USBPHY before the ehci port reset
+	 * sequence started.
+	 */
+		struct device *dev = hcd->self.controller;
+		struct fsl_usb2_platform_data *pdata;
+
+		pdata = (struct fsl_usb2_platform_data *)dev->platform_data;
+		if (dev->parent && dev->type) {
+			if (port1 == 1 && pdata->platform_init)
+				pdata->platform_init(NULL);
+		}
+		if (port1 == 1) {
+			if (!(portstatus&USB_PORT_STAT_CONNECTION)) {
+				/* Must clear HOSTDISCONDETECT when disconnect*/
+				stmp3xxx_clearl(
+					BM_USBPHY_CTRL_ENHOSTDISCONDETECT,
+					REGS_USBPHY_BASE + HW_USBPHY_CTRL);
+			}
+		}
+	}
+#endif
+
+#ifdef MXS_USB_HOST_HACK
+	{
+		struct device *dev = hcd->self.controller;
+		struct fsl_usb2_platform_data *pdata;
+
+		pdata = (struct fsl_usb2_platform_data *)dev->platform_data;
+		if (dev->parent && dev->type) {
+			if (port1 == 1 && pdata->platform_init)
+				pdata->platform_init(NULL);
+		}
+		if (port1 == 1) {
+			if (!(portstatus&USB_PORT_STAT_CONNECTION)) {
+				/* Must clear HOSTDISCONDETECT when disconnect*/
+				fsl_platform_set_usb_phy_dis(pdata, 0);
+			}
+		}
+	}
+#endif
 
 	if (hub->has_indicators) {
 		set_port_led(hub, port1, HUB_LED_AUTO);
