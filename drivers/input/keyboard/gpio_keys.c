@@ -145,9 +145,9 @@ static int __devinit gpio_keys_probe(struct platform_device *pdev)
 			gpio_free(button->gpio);
 			goto fail2;
 		}
-
+		//Due to imx233's GPIO cannot  support both rising and falling trigger,so we disable the faling.
 		error = request_irq(irq, gpio_keys_isr,
-				    IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
+				    IRQF_TRIGGER_RISING ,
 				    button->desc ? button->desc : "gpio_keys",
 				    bdata);
 		if (error) {

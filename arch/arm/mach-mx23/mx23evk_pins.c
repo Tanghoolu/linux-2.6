@@ -804,6 +804,7 @@ int mxs_mmc_hw_init_mmc0(void)
 	gpio_set_value(MMC0_WP, 0);
 	gpio_direction_input(MMC0_WP);
 
+#if 0  //PWM3->KEY_DOWN
 	/* Configure POWER pin as gpio to drive power to MMC slot */
 	ret = gpio_request(MMC0_POWER, "mmc0_power");
 	if (ret) {
@@ -812,7 +813,7 @@ int mxs_mmc_hw_init_mmc0(void)
 	}
 	gpio_direction_output(MMC0_POWER, 0);
 	mdelay(100);
-
+#endif
 	return 0;
 
 out_power:
@@ -824,7 +825,7 @@ out_wp:
 
 void mxs_mmc_hw_release_mmc0(void)
 {
-	gpio_free(MMC0_POWER);
+//	gpio_free(MMC0_POWER);
 	gpio_free(MMC0_WP);
 
 	mxs_release_pins(mx23evk_mmc_pins, ARRAY_SIZE(mx23evk_mmc_pins));

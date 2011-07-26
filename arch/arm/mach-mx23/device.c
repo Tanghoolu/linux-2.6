@@ -29,6 +29,8 @@
 #include <linux/phy.h>
 #include <linux/fec.h>
 #include <linux/gpmi-nfc.h>
+#include    <linux/gpio_keys.h>
+
 
 #include <asm/mach/map.h>
 
@@ -373,7 +375,75 @@ static void __init mx23_init_lradc(void)
 }
 #endif
 
+
+/*
+ * GPIO buttons on MX23  add by muryo
+ */
+#if defined(CONFIG_KEYBOARD_GPIO) || defined(CONFIG_KEYBOARD_GPIO_MODULE)
+static struct gpio_keys_button mx23_buttons[] = {
+    {
+	.gpio	=  MXS_PIN_TO_GPIO(PINID_AUART1_TX),//AUART1_TX
+	.code	= KEY_LEFT,
+	.desc	= "KEY_LEFT",
+	.active_low = 1,
+	.type = EV_KEY,
+	.wakeup	= 1,
+    },
+    {
+	.gpio	=  MXS_PIN_TO_GPIO(PINID_AUART1_RX), //AUART_RX
+	.code	= KEY_RIGHT,
+	.desc	= "KEY_RIGHT",
+	.active_low	= 1,
+	.type = EV_KEY,
+	.wakeup	= 1,
+    },
+    {
+	.gpio	= MXS_PIN_TO_GPIO(PINID_AUART1_RTS), //AUART_RTS
+	.code	= KEY_UP,
+	.desc	= "KEY_UP",
+	.active_low	= 1,
+	.type = EV_KEY,
+	.wakeup	= 1,
+    },
+    {
+	.gpio	= MXS_PIN_TO_GPIO(PINID_PWM3), //PWM3
+	.code	= KEY_DOWN,
+	.desc	= "KEY_DOWN",
+	.active_low	= 1,
+	.type = EV_KEY,
+	.wakeup = 1,
+    }
+};
+
+static struct gpio_keys_platform_data  mx23_button_data = {
+    .buttons = mx23_buttons,
+    .nbuttons = ARRAY_SIZE(mx23_buttons),
+};
+
+static struct platform_device mx23_button_device =
+{
+    .name	= "gpio-keys",
+    .id		= -1,
+    .num_resources	= 0,
+    .dev	= {
+	.platform_data = &mx23_button_data,
+    }
+};
+    
+
+static void __init mx23_add_device_buttons(void)
+{
+    //TODO
+
+    platform_device_register(&mx23_button_device);
+}
+#else
+static void __init mx23_add_device_buttons(void) 
+{
+}
+#endif
 #if defined(CONFIG_KEYBOARD_MXS) || defined(CONFIG_KEYBOARD_MXS_MODULE)
+#if 0
 static struct mxskbd_keypair keyboard_data[] = {
 	{ 100, KEY_F1 },
 	{ 306, KEY_RIGHT},
@@ -383,6 +453,18 @@ static struct mxskbd_keypair keyboard_data[] = {
 	{ 2207, KEY_DOWN },
 	{ 1907, KEY_F3 },
 	{ 2831, KEY_SELECT },
+	{ -1, 0 },
+};
+#endif
+static struct mxskbd_keypair keyboard_data[] = {
+	{ 3300, KEY_F1 },
+	{ 1886, KEY_RIGHT},
+	{ 3300, KEY_F2},
+	{ 2501, KEY_LEFT },
+	{ 482, KEY_UP },
+	{ 1223, KEY_DOWN },
+	{ 3300, KEY_F3 },
+	{ 3, KEY_SELECT },
 	{ -1, 0 },
 };
 
@@ -940,6 +1022,7 @@ int __init mx23_device_init(void)
 	mx23_init_lradc();
 	mx23_init_i2c();
 	mx23_init_kbd();
+	mx23_add_device_buttons(); //muryo
 	mx23_init_wdt();
 	mx23_init_ts();
 	mx23_init_rtc();
