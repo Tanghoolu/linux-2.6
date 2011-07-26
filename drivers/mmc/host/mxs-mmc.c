@@ -145,9 +145,9 @@ static int mxs_mmc_get_ro(struct mmc_host *mmc)
 {
 	struct mxs_mmc_host *host = mmc_priv(mmc);
 	struct mxs_mmc_platform_data *mmc_data = host->dev->platform_data;
-
-	if (mmc_data && mmc_data->get_wp)
-		return mmc_data->get_wp();
+        //Disable SD card read status detect.
+	//if (mmc_data && mmc_data->get_wp)
+	//	return mmc_data->get_wp();
 
 	return 0;
 }
