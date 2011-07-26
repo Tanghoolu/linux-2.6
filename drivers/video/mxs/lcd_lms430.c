@@ -258,13 +258,19 @@ static int set_bl_intensity(struct mxs_platform_bl_data *data,
 	if (regulator_set_current_limit
 	    (data->regulator, bl_to_power(intensity), bl_to_power(intensity)))
 		return -EBUSY;
-
+#if 0
 	scaled_int = values[intensity / 10];
 	if (scaled_int < 100) {
 		int rem = intensity - 10 * (intensity / 10);	/* r = i % 10; */
 		scaled_int += rem * (values[intensity / 10 + 1] -
 				     values[intensity / 10]) / 10;
 	}
+#endif
+      if(intensity)
+      scaled_int = intensity*6-1;
+      else
+	  scaled_int = 0;
+	
 	__raw_writel(BF_PWM_ACTIVEn_INACTIVE(scaled_int) |
 		     BF_PWM_ACTIVEn_ACTIVE(0),
 		     REGS_PWM_BASE + HW_PWM_ACTIVEn(2));
