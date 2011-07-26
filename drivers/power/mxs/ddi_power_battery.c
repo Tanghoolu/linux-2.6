@@ -1872,8 +1872,11 @@ void ddi_power_InitOutputBrownouts(void)
 	__raw_writel(temp, REGS_POWER_BASE + HW_POWER_VDDACTRL);
 
 	temp = __raw_readl(REGS_POWER_BASE + HW_POWER_VDDIOCTRL);
-	temp &= ~BM_POWER_VDDIOCTRL_PWDN_BRNOUT;
-	__raw_writel(temp, REGS_POWER_BASE + HW_POWER_VDDIOCTRL);
+/***************************************************************/
+//Sometimes, the board may touch  brownout, So we disable it.
+/***************************************************************/
+//	temp &= ~BM_POWER_VDDIOCTRL_PWDN_BRNOUT;
+//	__raw_writel(temp, REGS_POWER_BASE + HW_POWER_VDDIOCTRL);
 }
 
 /* used for debugging purposes only */
