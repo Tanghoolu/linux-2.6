@@ -388,6 +388,7 @@ static struct gpio_keys_button mx23_buttons[] = {
 	.active_low = 1,
 	.type = EV_KEY,
 	.wakeup	= 1,
+	.debounce_interval = 60,
     },
     {
 	.gpio	=  MXS_PIN_TO_GPIO(PINID_AUART1_RX), //AUART_RX
@@ -396,6 +397,7 @@ static struct gpio_keys_button mx23_buttons[] = {
 	.active_low	= 1,
 	.type = EV_KEY,
 	.wakeup	= 1,
+	.debounce_interval = 60,
     },
     {
 	.gpio	= MXS_PIN_TO_GPIO(PINID_AUART1_RTS), //AUART_RTS
@@ -404,6 +406,7 @@ static struct gpio_keys_button mx23_buttons[] = {
 	.active_low	= 1,
 	.type = EV_KEY,
 	.wakeup	= 1,
+	.debounce_interval = 60,
     },
     {
 	.gpio	= MXS_PIN_TO_GPIO(PINID_PWM3), //PWM3
@@ -412,6 +415,7 @@ static struct gpio_keys_button mx23_buttons[] = {
 	.active_low	= 1,
 	.type = EV_KEY,
 	.wakeup = 1,
+	.debounce_interval = 60,
     }
 };
 
